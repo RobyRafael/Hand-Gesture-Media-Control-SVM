@@ -12,46 +12,94 @@ class FeatureExtractor:
         
         # Set path untuk menyimpan hasil
         self.output_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "processed_data")
-        if not os.path.exists(self.output_path):
-            os.makedirs(self.output_path)
-            
-        # Buat folder untuk gambar preprocessing
-        self.preprocess_path = os.path.join(self.output_path, "preprocessed_images")
-        if not os.path.exists(self.preprocess_path):
-            os.makedirs(self.preprocess_path)
         
-        # Parameter untuk pemrosesan gambar
-        self.image_size = (224, 224)  # Ukuran standar untuk normalisasi
-        self.blur_value = 7
-        self.threshold_value = 127  # Nilai threshold yang lebih tinggi untuk mengatasi bayangan
-        
-        # Validasi folder dataset
-        if not os.path.exists(self.base_path):
-            raise IOError("Folder dataset tidak ditemukan")
-            
         # List untuk menyimpan hasil ekstraksi fitur
         self.features_data = []
         
-    def preprocess_image(self, frame):
-        """Preprocessing gambar: resize, grayscale, threshold"""
-        # Resize gambar
-        frame = cv2.resize(frame, self.image_size)
+        # Validasi folder dataset dan buat struktur output
+        self.validate_and_setup_folders()
         
-        # Konversi ke grayscale
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    def validate_and_setup_folders(self):
+        """Validasi keberadaan folder dataset dan setup folder output"""
+        print("Memeriksa dan membuat struktur folder...")
         
-        # Aplikasikan blur untuk mengurangi noise
+        # Cek folder dataset
+        if not os.path.exists(self.base_path):
+            raise IOError(f"Folder dataset tidak ditemukan di: {self.base_path}")
+            
+        # Cek subfolder dataset (0-5)
+        for label in range(6):
+            folder_path = os.path.join(self.base_path, str(label))
+            if not os.path.exists(folder_path):
+                raise IOError(f"Folder dataset {label} tidak ditemukan di: {folder_path}")
+            
+            # Hitung jumlah gambar
+            image_files = [f for f in os.listdir(folder_path) if f.endswith(('.jpg', '.jpeg', '.png'))]
+            print(f"Found {len(image_files)} images in folder {label}")
+        
+        print("\nMembuat struktur folder output...")
+        
+        # Buat folder output utama
+        if not os.path.exists(self.output_path):
+            os.makedirs(self.output_path)
+            print(f"Created: {self.output_path}")
+        
+        # Buat subfolder untuk setiap label
+        for label in range(6):
+            label_path = os.path.join(self.output_path, str(label))
+            if not os.path.exists(label_path):
+                os.makedirs(label_path)
+                print(f"Created: {label_path}")
+            
+            # Buat subfolder untuk setiap tahap preprocessing
+            stages = ['1_resized', '2_grayscale', '3_blur', '4_threshold', '5_final']
+            for stage in stages:
+                stage_path = os.path.join(label_path, stage)
+                if not os.path.exists(stage_path):
+                    os.makedirs(stage_path)
+                    print(f"Created: {stage_path}")
+        
+        print("\nStruktur folder siap digunakan!")
+
+    def save_preprocessing_step(self, image, label, stage, filename):
+        """Menyimpan hasil setiap tahap preprocessing"""
+        # Tentukan path berdasarkan label dan tahap
+        save_path = os.path.join(self.output_path, str(label), stage, f"proc_{filename}")
+        
+        # Konversi ke BGR jika grayscale
+        if len(image.shape) == 2:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            
+        # Simpan gambar
+        cv2.imwrite(save_path, image)
+        
+    def preprocess_image(self, frame, label, filename):
+        """Preprocessing gambar dengan menyimpan setiap tahap"""
+        # 1. Resize gambar
+        resized = cv2.resize(frame, self.image_size)
+        self.save_preprocessing_step(resized, label, '1_resized', filename)
+        
+        # 2. Konversi ke grayscale
+        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+        gray_colored = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)  # Untuk visualisasi
+        self.save_preprocessing_step(gray_colored, label, '2_grayscale', filename)
+        
+        # 3. Aplikasikan blur
         blur = cv2.GaussianBlur(gray, (self.blur_value, self.blur_value), 0)
+        blur_colored = cv2.cvtColor(blur, cv2.COLOR_GRAY2BGR)  # Untuk visualisasi
+        self.save_preprocessing_step(blur_colored, label, '3_blur', filename)
         
-        # Aplikasikan adaptive threshold untuk mengatasi masalah pencahayaan
+        # 4. Aplikasikan threshold
         thresh = cv2.adaptiveThreshold(
             blur,
             255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV,
-            11,  # Block size
-            2    # Constant subtracted from mean
+            11,
+            2
         )
+        thresh_colored = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)  # Untuk visualisasi
+        self.save_preprocessing_step(thresh_colored, label, '4_threshold', filename)
         
         return thresh
 
@@ -181,57 +229,113 @@ class FeatureExtractor:
         except Exception as e:
             print(f"Error dalam menyimpan gambar debug: {str(e)}")
 
+    def save_final_result(self, original, thresh, contour, hull, features, label, filename):
+        """Menyimpan hasil akhir dengan visualisasi lengkap"""
+        try:
+            # Buat visualisasi debug
+            debug = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
+            
+            if contour is not None and hull is not None:
+                # Gambar kontur dan hull
+                cv2.drawContours(debug, [contour], -1, (0, 255, 0), 2)
+                cv2.drawContours(debug, [hull], -1, (0, 0, 255), 2)
+            
+            # Resize original untuk visualisasi
+            original_resized = cv2.resize(original, (self.image_size[0], self.image_size[1]))
+            
+            # Buat komposit 4 gambar (2x2 grid)
+            top_row = np.hstack((original_resized, debug))
+            
+            # Tambahkan informasi
+            info_image = np.zeros_like(original_resized)
+            cv2.putText(info_image, f'Label: {label}', (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(info_image, f'Defects: {features[0]}', (10, 60),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(info_image, f'Area Ratio: {features[1]:.3f}', (10, 90),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(info_image, f'Aspect Ratio: {features[2]:.3f}', (10, 120),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Simpan hasil akhir
+            final_path = os.path.join(self.output_path, str(label), '5_final', f'final_{filename}')
+            cv2.imwrite(final_path, top_row)
+            
+        except Exception as e:
+            print(f"Error dalam menyimpan hasil akhir: {str(e)}")
+
     def process_dataset(self):
         """Proses seluruh dataset dan ekstrak fitur"""
         print("\n=== Ekstraksi Fitur Dataset ===")
+        total_processed = 0
+        total_images = 0
+        
+        # Hitung total gambar
+        for label in range(6):
+            folder_path = os.path.join(self.base_path, str(label))
+            if os.path.exists(folder_path):
+                image_files = [f for f in os.listdir(folder_path) 
+                             if f.endswith(('.jpg', '.jpeg', '.png'))]
+                total_images += len(image_files)
+        
+        print(f"Total gambar yang akan diproses: {total_images}")
         print("Processing...")
         
         # Iterasi setiap folder (label)
         for label in range(6):
             folder_path = os.path.join(self.base_path, str(label))
-            print(f"\nMemproses folder {label}...")
             
             # Proses setiap gambar
             image_files = [f for f in os.listdir(folder_path) 
                           if f.endswith(('.jpg', '.jpeg', '.png'))]
             
-            for img_file in image_files:
+            print(f"\nMemproses folder {label} ({len(image_files)} gambar)...")
+            
+            for i, img_file in enumerate(image_files, 1):
                 img_path = os.path.join(folder_path, img_file)
+                print(f"[{total_processed + 1}/{total_images}] Processing: {img_file}")
                 
-                # Baca dan proses gambar
-                frame = cv2.imread(img_path)
-                if frame is None:
-                    print(f"Tidak dapat membaca: {img_file}")
-                    continue
+                try:
+                    # Baca gambar
+                    frame = cv2.imread(img_path)
+                    if frame is None:
+                        print(f"ERROR: Tidak dapat membaca: {img_file}")
+                        continue
                     
-                # Preprocessing
-                thresh = self.preprocess_image(frame)
-                
-                # Ekstrak fitur
-                contour, hull, features = self.get_features(thresh)
-                
-                # Simpan gambar debug
-                self.save_debug_image(frame, thresh, contour, hull, features, 
-                                    label, img_file)
-                
-                # Simpan hasil ekstraksi
-                self.features_data.append({
-                    'filename': img_file,
-                    'label': label,
-                    'n_defects': features[0],
-                    'area_ratio': features[1],
-                    'aspect_ratio': features[2]
-                })
-                
-        # Simpan hasil ke CSV
-        df = pd.DataFrame(self.features_data)
-        csv_path = os.path.join(self.output_path, 'features.csv')
-        df.to_csv(csv_path, index=False)
+                    # Preprocessing dengan menyimpan setiap tahap
+                    thresh = self.preprocess_image(frame, label, img_file)
+                    
+                    # Ekstrak fitur
+                    contour, hull, features = self.get_features(thresh)
+                    
+                    # Simpan hasil akhir
+                    self.save_final_result(frame, thresh, contour, hull, features, 
+                                         label, img_file)
+                    
+                    # Simpan hasil ekstraksi ke list
+                    self.features_data.append({
+                        'filename': img_file,
+                        'label': label,
+                        'n_defects': features[0],
+                        'area_ratio': features[1],
+                        'aspect_ratio': features[2]
+                    })
+                    
+                    total_processed += 1
+                    if total_processed % 10 == 0:
+                        print(f"Progress: {total_processed}/{total_images} ({(total_processed/total_images)*100:.1f}%)")
+                        
+                except Exception as e:
+                    print(f"ERROR processing {img_file}: {str(e)}")
+                    continue
         
-        print("\nProses selesai!")
-        print(f"Hasil ekstraksi fitur disimpan di: {csv_path}")
-        print(f"Gambar debug disimpan di: {self.preprocess_path}")
-
-if __name__ == "__main__":
-    extractor = FeatureExtractor()
-    extractor.process_dataset()
+        # Simpan hasil ke CSV
+        if self.features_data:
+            df = pd.DataFrame(self.features_data)
+            csv_path = os.path.join(self.output_path, 'features.csv')
+            df.to_csv(csv_path, index=False)
+            print(f"\nBerhasil menyimpan {len(self.features_data)} hasil ekstraksi ke: {csv_path}")
+        else:
+            print("\nWARNING: Tidak ada data yang berhasil diekstrak!")
+        
+        print(f"\nProses selesai! {total_processed}/{total_images} gambar berhasil diproses.")
