@@ -12,113 +12,106 @@ class FeatureExtractor:
         
         # Set path untuk menyimpan hasil
         self.output_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "processed_data")
-        
-        # List untuk menyimpan hasil ekstraksi fitur
-        self.features_data = []
-        
-        # Validasi folder dataset dan buat struktur output
-        self.validate_and_setup_folders()
-        
-    def validate_and_setup_folders(self):
-        """Validasi keberadaan folder dataset dan setup folder output"""
-        print("Memeriksa dan membuat struktur folder...")
-        
-        # Cek folder dataset
-        if not os.path.exists(self.base_path):
-            raise IOError(f"Folder dataset tidak ditemukan di: {self.base_path}")
-            
-        # Cek subfolder dataset (0-5)
-        for label in range(6):
-            folder_path = os.path.join(self.base_path, str(label))
-            if not os.path.exists(folder_path):
-                raise IOError(f"Folder dataset {label} tidak ditemukan di: {folder_path}")
-            
-            # Hitung jumlah gambar
-            image_files = [f for f in os.listdir(folder_path) if f.endswith(('.jpg', '.jpeg', '.png'))]
-            print(f"Found {len(image_files)} images in folder {label}")
-        
-        print("\nMembuat struktur folder output...")
-        
-        # Buat folder output utama
         if not os.path.exists(self.output_path):
             os.makedirs(self.output_path)
-            print(f"Created: {self.output_path}")
-        
-        # Buat subfolder untuk setiap label
-        for label in range(6):
-            label_path = os.path.join(self.output_path, str(label))
-            if not os.path.exists(label_path):
-                os.makedirs(label_path)
-                print(f"Created: {label_path}")
             
-            # Buat subfolder untuk setiap tahap preprocessing
-            stages = ['1_resized', '2_grayscale', '3_blur', '4_threshold', '5_final']
-            for stage in stages:
-                stage_path = os.path.join(label_path, stage)
-                if not os.path.exists(stage_path):
-                    os.makedirs(stage_path)
-                    print(f"Created: {stage_path}")
+        # Buat folder untuk gambar preprocessing
+        self.preprocess_path = os.path.join(self.output_path, "preprocessed_images")
+        if not os.path.exists(self.preprocess_path):
+            os.makedirs(self.preprocess_path)
         
-        print("\nStruktur folder siap digunakan!")
+        # Parameter untuk pemrosesan gambar
+        self.image_size = (224, 224)  # Ukuran standar untuk normalisasi
+        self.blur_value = 15
+        self.threshold_value = 200  # 127 Nilai threshold yang lebih tinggi untuk mengatasi bayangan
+        
+        # Validasi folder dataset
+        if not os.path.exists(self.base_path):
+            raise IOError("Folder dataset tidak ditemukan")
+            
+        # List untuk menyimpan hasil ekstraksi fitur
+        self.features_data = []
 
-    def save_preprocessing_step(self, image, label, stage, filename):
-        """Menyimpan hasil setiap tahap preprocessing"""
-        # Tentukan path berdasarkan label dan tahap
-        save_path = os.path.join(self.output_path, str(label), stage, f"proc_{filename}")
+    # fungsi untuk mengolah gambar ketika ada putih yang muncul tapi di sekitarnya tidak ada putih lainnya maka di buat hitam
+    # tujuannya untuk mengurangi noise pada gambar,  sehingga hanya bagian tangan yang terlihat
+    # nanti akan di panggil setelah adaptive threshold    
+    def remove_noise(self, thresh):
+        """Hapus noise kecil pada gambar threshold"""
+        # Temukan kontur
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Konversi ke BGR jika grayscale
-        if len(image.shape) == 2:
-            image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-            
-        # Simpan gambar
-        cv2.imwrite(save_path, image)
+        # Buat mask untuk menghapus noise
+        mask = np.zeros_like(thresh)
         
-    def preprocess_image(self, frame, label, filename):
-        """Preprocessing gambar dengan menyimpan setiap tahap"""
-        # 1. Resize gambar
-        resized = cv2.resize(frame, self.image_size)
-        self.save_preprocessing_step(resized, label, '1_resized', filename)
+        # Tentukan area minimum untuk kontur yang valid
+        min_area = 75
         
-        # 2. Konversi ke grayscale
-        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-        gray_colored = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)  # Untuk visualisasi
-        self.save_preprocessing_step(gray_colored, label, '2_grayscale', filename)
+        # Filter kontur berdasarkan area dan gambar hanya kontur besar pada mask
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area > min_area:
+                cv2.drawContours(mask, [contour], 0, 255, -1)
+                
+        # Kembalikan hasil dengan hanya kontur yang valid
+        return mask
+    
+    # Fungsi untuk preprocessing gambar resize, grayscale, blur, dan adaptive threshold
+    def preprocess_image(self, frame):
+        """Preprocessing gambar: resize, grayscale, threshold"""
+        # Resize gambar
+        frame = cv2.resize(frame, self.image_size)
         
-        # 3. Aplikasikan blur
-        blur = cv2.GaussianBlur(gray, (self.blur_value, self.blur_value), 0)
-        blur_colored = cv2.cvtColor(blur, cv2.COLOR_GRAY2BGR)  # Untuk visualisasi
-        self.save_preprocessing_step(blur_colored, label, '3_blur', filename)
+        # Konversi ke grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # 4. Aplikasikan threshold
+        # Aplikasikan blur untuk mengurangi noise
+        blur = cv2.GaussianBlur(gray, (self.blur_value, self.blur_value), 0) # 0 untuk 
+        
+        # Aplikasikan adaptive threshold untuk mengatasi masalah pencahayaan
         thresh = cv2.adaptiveThreshold(
             blur,
             255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV,
-            11,
-            2
+            11,  # Block size
+            6    # Constant subtracted from mean
         )
-        thresh_colored = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)  # Untuk visualisasi
-        self.save_preprocessing_step(thresh_colored, label, '4_threshold', filename)
         
-        return thresh
-
+        # Hapus noise kecil
+        cleaned = self.remove_noise(thresh)
+        
+        return cleaned    
+    
+    # Fungsi untuk ekstrak fitur dari gambar threshold
     def get_features(self, thresh):
         """Ekstrak fitur dari gambar threshold"""
         try:
-            # Cari kontur
+            # Cari semua kontur dari gambar threshold
             contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not contours:
                 return None, None, [0, 0, 0]  # Return default features jika tidak ada kontur
                 
-            # Ambil kontur terbesar (tangan)
-            contour = max(contours, key=cv2.contourArea)
+            # Ambil kontur terbesar dengan for loop (diasumsikan sebagai tangan)
+            max_area = 0
+            max_contour_index = 0
             
-            # Sederhanakan kontur untuk mengurangi noise
+            for i in range(len(contours)):
+                area = cv2.contourArea(contours[i])
+                if area > max_area:
+                    max_area = area
+                    max_contour_index = i
+                    
+            # Ambil kontur terbesar
+            contour = contours[max_contour_index]
+            
+            # Sederhanakan kontur untuk mengurangi noise dan membuat outline lebih halus
             epsilon = 0.01 * cv2.arcLength(contour, True)
             contour = cv2.approxPolyDP(contour, epsilon, True)
             
             # Hitung convex hull
+            # Convex hull adalah batas luar dari kontur tangan
+            # Convex hull adalah titik-titik dari batas luar kontur tangan
+            # Jika tidak ada kontur, kita set ke 0
             try:
                 hull = cv2.convexHull(contour, returnPoints=False)
                 # Hitung defects
@@ -199,143 +192,141 @@ class FeatureExtractor:
     def save_debug_image(self, original, thresh, contour, hull, features, label, filename):
         """Simpan gambar debug dengan visualisasi"""
         try:
-            # Buat salinan gambar threshold untuk debug
+            # Resize dan konversi semua gambar ke BGR (3 channel) dengan ukuran yang sama
+            original_resized = cv2.resize(original, self.image_size)
+            
+            # Konversi grayscale ke BGR untuk visualisasi
+            original_gray = cv2.cvtColor(original_resized, cv2.COLOR_BGR2GRAY)
+            original_gray_bgr = cv2.cvtColor(original_gray, cv2.COLOR_GRAY2BGR)
+            
+            # Proses blur
+            original_blur = cv2.GaussianBlur(original_gray, (self.blur_value, self.blur_value), 0)
+            original_blur_bgr = cv2.cvtColor(original_blur, cv2.COLOR_GRAY2BGR)
+              # Proses threshold
+            original_thresh = cv2.adaptiveThreshold(
+                original_blur,
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY_INV,
+                11,
+                2
+            )
+            original_thresh_bgr = cv2.cvtColor(original_thresh, cv2.COLOR_GRAY2BGR)
+            
+            # Aplikasikan remove noise
+            cleaned_thresh = self.remove_noise(original_thresh)
+            cleaned_thresh_bgr = cv2.cvtColor(cleaned_thresh, cv2.COLOR_GRAY2BGR)
+            
+            # Buat debug image dengan kontur
             debug = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-            
             if contour is not None and hull is not None:
-                # Gambar kontur
                 cv2.drawContours(debug, [contour], -1, (0, 255, 0), 2)
-                # Gambar hull
                 cv2.drawContours(debug, [hull], -1, (0, 0, 255), 2)
+              # Gabungkan semua gambar
+            top_row = np.hstack((
+                original_resized,      # Gambar asli
+                original_gray_bgr,     # Hasil grayscale
+                original_blur_bgr,     # Hasil blur
+                original_thresh_bgr,   # Hasil threshold
+                cleaned_thresh_bgr,    # Hasil penghapusan noise
+                debug                  # Hasil final dengan kontur
+            ))
             
-            # Buat gambar komposit (original dan debug side by side)
-            original_resized = cv2.resize(original, (self.image_size[0], self.image_size[1]))
-            composite = np.hstack((original_resized, debug))
+            # Tambahkan label dan informasi
+            # Posisikan teks di gambar asli
+            cv2.putText(top_row, f'Original', (10, 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
-            # Tambah informasi
-            cv2.putText(composite, f'Label: {label}', (10, 20), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(composite, f'Defects: {features[0]}', (10, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(composite, f'Area Ratio: {features[1]:.3f}', (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(composite, f'Aspect Ratio: {features[2]:.3f}', (10, 80),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            # Posisikan teks di gambar grayscale
+            x_offset = self.image_size[0]
+            cv2.putText(top_row, f'Grayscale', (x_offset + 10, 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
-            # Simpan gambar
+            # Posisikan teks di gambar blur
+            x_offset = self.image_size[0] * 2
+            cv2.putText(top_row, f'Blur', (x_offset + 10, 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+              # Posisikan teks di gambar threshold
+            x_offset = self.image_size[0] * 3
+            cv2.putText(top_row, f'Threshold', (x_offset + 10, 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # Posisikan teks di gambar cleaned threshold
+            x_offset = self.image_size[0] * 4
+            cv2.putText(top_row, f'Noise Removed', (x_offset + 10, 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # Posisikan teks di gambar debug
+            x_offset = self.image_size[0] * 5
+            cv2.putText(top_row, f'Label: {label}', (x_offset + 10, 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(top_row, f'Defects: {features[0]}', (x_offset + 10, 40),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(top_row, f'Area Ratio: {features[1]:.3f}', (x_offset + 10, 60),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(top_row, f'Aspect Ratio: {features[2]:.3f}', (x_offset + 10, 80),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # Simpan gambar hasil
             output_filename = os.path.join(self.preprocess_path, f'debug_{filename}')
-            cv2.imwrite(output_filename, composite)
+            cv2.imwrite(output_filename, top_row)
             
         except Exception as e:
             print(f"Error dalam menyimpan gambar debug: {str(e)}")
-
-    def save_final_result(self, original, thresh, contour, hull, features, label, filename):
-        """Menyimpan hasil akhir dengan visualisasi lengkap"""
-        try:
-            # Buat visualisasi debug
-            debug = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-            
-            if contour is not None and hull is not None:
-                # Gambar kontur dan hull
-                cv2.drawContours(debug, [contour], -1, (0, 255, 0), 2)
-                cv2.drawContours(debug, [hull], -1, (0, 0, 255), 2)
-            
-            # Resize original untuk visualisasi
-            original_resized = cv2.resize(original, (self.image_size[0], self.image_size[1]))
-            
-            # Buat komposit 4 gambar (2x2 grid)
-            top_row = np.hstack((original_resized, debug))
-            
-            # Tambahkan informasi
-            info_image = np.zeros_like(original_resized)
-            cv2.putText(info_image, f'Label: {label}', (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(info_image, f'Defects: {features[0]}', (10, 60),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(info_image, f'Area Ratio: {features[1]:.3f}', (10, 90),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(info_image, f'Aspect Ratio: {features[2]:.3f}', (10, 120),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
-            # Simpan hasil akhir
-            final_path = os.path.join(self.output_path, str(label), '5_final', f'final_{filename}')
-            cv2.imwrite(final_path, top_row)
-            
-        except Exception as e:
-            print(f"Error dalam menyimpan hasil akhir: {str(e)}")
+            import traceback
+            traceback.print_exc()  # Tambahkan ini untuk debug yang lebih detail
 
     def process_dataset(self):
         """Proses seluruh dataset dan ekstrak fitur"""
         print("\n=== Ekstraksi Fitur Dataset ===")
-        total_processed = 0
-        total_images = 0
-        
-        # Hitung total gambar
-        for label in range(6):
-            folder_path = os.path.join(self.base_path, str(label))
-            if os.path.exists(folder_path):
-                image_files = [f for f in os.listdir(folder_path) 
-                             if f.endswith(('.jpg', '.jpeg', '.png'))]
-                total_images += len(image_files)
-        
-        print(f"Total gambar yang akan diproses: {total_images}")
         print("Processing...")
         
         # Iterasi setiap folder (label)
         for label in range(6):
             folder_path = os.path.join(self.base_path, str(label))
+            print(f"\nMemproses folder {label}...")
             
             # Proses setiap gambar
             image_files = [f for f in os.listdir(folder_path) 
                           if f.endswith(('.jpg', '.jpeg', '.png'))]
             
-            print(f"\nMemproses folder {label} ({len(image_files)} gambar)...")
-            
-            for i, img_file in enumerate(image_files, 1):
+            for img_file in image_files:
                 img_path = os.path.join(folder_path, img_file)
-                print(f"[{total_processed + 1}/{total_images}] Processing: {img_file}")
                 
-                try:
-                    # Baca gambar
-                    frame = cv2.imread(img_path)
-                    if frame is None:
-                        print(f"ERROR: Tidak dapat membaca: {img_file}")
-                        continue
-                    
-                    # Preprocessing dengan menyimpan setiap tahap
-                    thresh = self.preprocess_image(frame, label, img_file)
-                    
-                    # Ekstrak fitur
-                    contour, hull, features = self.get_features(thresh)
-                    
-                    # Simpan hasil akhir
-                    self.save_final_result(frame, thresh, contour, hull, features, 
-                                         label, img_file)
-                    
-                    # Simpan hasil ekstraksi ke list
-                    self.features_data.append({
-                        'filename': img_file,
-                        'label': label,
-                        'n_defects': features[0],
-                        'area_ratio': features[1],
-                        'aspect_ratio': features[2]
-                    })
-                    
-                    total_processed += 1
-                    if total_processed % 10 == 0:
-                        print(f"Progress: {total_processed}/{total_images} ({(total_processed/total_images)*100:.1f}%)")
-                        
-                except Exception as e:
-                    print(f"ERROR processing {img_file}: {str(e)}")
+                # Baca dan proses gambar
+                frame = cv2.imread(img_path)
+                if frame is None:
+                    print(f"Tidak dapat membaca: {img_file}")
                     continue
-        
+                    
+                # Preprocessing
+                thresh = self.preprocess_image(frame)
+                
+                # Ekstrak fitur
+                contour, hull, features = self.get_features(thresh)
+                
+                # Simpan gambar debug
+                self.save_debug_image(frame, thresh, contour, hull, features, 
+                                    label, img_file)
+                
+                # Simpan hasil ekstraksi
+                self.features_data.append({
+                    'filename': img_file,
+                    'label': label,
+                    'n_defects': features[0],
+                    'area_ratio': features[1],
+                    'aspect_ratio': features[2]
+                })
+                
         # Simpan hasil ke CSV
-        if self.features_data:
-            df = pd.DataFrame(self.features_data)
-            csv_path = os.path.join(self.output_path, 'features.csv')
-            df.to_csv(csv_path, index=False)
-            print(f"\nBerhasil menyimpan {len(self.features_data)} hasil ekstraksi ke: {csv_path}")
-        else:
-            print("\nWARNING: Tidak ada data yang berhasil diekstrak!")
+        df = pd.DataFrame(self.features_data)
+        csv_path = os.path.join(self.output_path, 'features.csv')
+        df.to_csv(csv_path, index=False)
         
-        print(f"\nProses selesai! {total_processed}/{total_images} gambar berhasil diproses.")
+        print("\nProses selesai!")
+        print(f"Hasil ekstraksi fitur disimpan di: {csv_path}")
+        print(f"Gambar debug disimpan di: {self.preprocess_path}")
+
+if __name__ == "__main__":
+    extractor = FeatureExtractor()
+    extractor.process_dataset()
