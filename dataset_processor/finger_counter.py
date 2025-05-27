@@ -54,7 +54,8 @@ class FeatureExtractor:
                 
         # Kembalikan hasil dengan hanya kontur yang valid
         return mask
-      # Fungsi untuk preprocessing gambar resize, grayscale, blur, dan adaptive threshold    
+    
+    # Fungsi untuk preprocessing gambar resize, grayscale, blur, dan adaptive threshold    
     def detect_wrist_and_crop(self, cleaned):
         """Deteksi pergelangan tangan dan crop gambar dari pergelangan ke ujung jari
            Menganggap semua piksel putih sebagai bagian dari tangan"""
@@ -171,7 +172,6 @@ class FeatureExtractor:
             
             # Dapatkan dimensi gambar
             height, width = thresh.shape if hasattr(thresh, 'shape') else (len(thresh), len(thresh[0]))
-            print(f"Processing cropped hand of size: {height}x{width}")
 
             # Mencari semua piksel putih
             white_pixels = []
@@ -214,83 +214,20 @@ class FeatureExtractor:
             # 6. Kepadatan piksel
             features.append(density)
             
-            # Normalisasi fitur
-            normalized_features = self.normalize_features(features)
             
             # Buat representasi kontur dan hull untuk visualisasi
             visual_contour = self.create_visual_contour(white_pixels)
             visual_hull = self.create_visual_contour(convex_hull)
             
-            return visual_contour, visual_hull, normalized_features
+            return visual_contour, visual_hull, features
             
         except Exception as e:
             print(f"Error dalam ekstraksi fitur manual: {str(e)}")
             import traceback
             traceback.print_exc()
             return None, None, [0, 0, 0, 0, 0, 0]
-            
-    # Fungsi untuk normalisasi fitur
-    def normalize_features(self, features):
-        """Normalisasi fitur ke range [0,1]"""
-        # Nilai maksimum tipikal untuk setiap fitur berdasarkan eksperimen
-        max_values = [4, 1, 5, 1, 1, 1]  # sesuaikan nilai ini berdasarkan data
         
-        normalized = []
-        
-        for i, feature in enumerate(features):
-            # Batasi nilai ke range [0,1]
-            if max_values[i] > 0:
-                norm_val = min(1.0, max(0.0, feature / max_values[i]))
-            else:
-                norm_val = 0
-            normalized.append(norm_val)
-            
-        return normalized
-        
-    # Fungsi untuk mendapatkan mean dan standar deviasi dari cropped hand
-    def get_mean_area(self, cropped_hand):
-        """Menghitung rata-rata area, std deviasi, dan densitas dari piksel putih"""
-        height, width = cropped_hand.shape
-        print(f"Processing cropped hand of size: {height}x{width}")
-        pixel_positions = []
-        white_pixels = 0
-        
-        # Temukan semua piksel putih dan catat posisinya
-        for y in range(height):
-            for x in range(width):
-                if cropped_hand[y, x] == 255:
-                    pixel_positions.append((x, y))
-                    white_pixels += 1
-
-        # Jika tidak ada piksel putih, kembalikan nilai default
-        if white_pixels == 0:
-            return 0, 0, 0
-        
-        # Hitung centroid (titik pusat)
-        sum_x = sum(pos[0] for pos in pixel_positions)
-        sum_y = sum(pos[1] for pos in pixel_positions)
-        center_x = sum_x / white_pixels
-        center_y = sum_y / white_pixels
-        
-        # Hitung jarak dari setiap piksel ke centroid
-        distances = []
-        for pos in pixel_positions:
-            dist = ((pos[0] - center_x)**2 + (pos[1] - center_y)**2)**0.5
-            distances.append(dist)
-        
-        # Hitung mean (rata-rata jarak)
-        mean_distance = sum(distances) / len(distances) if distances else 0
-        
-        # Hitung standard deviation (standar deviasi jarak)
-        sum_squared_diff = sum((d - mean_distance)**2 for d in distances) if distances else 0
-        std_dev = (sum_squared_diff / len(distances))**0.5 if distances else 0
-        
-        # Hitung densitas (proporsi piksel putih terhadap total area)
-        total_area = height * width
-        density = white_pixels / total_area if total_area > 0 else 0
-        
-        return mean_distance, std_dev, density
-    
+    # Fungsi untuk menyimpan gambar debug dengan visualisasi
     def save_debug_image(self, original, thresh, contour, hull, features, label, filename):
         """Simpan gambar debug dengan visualisasi"""
         try:
@@ -489,12 +426,8 @@ class FeatureExtractor:
                 self.features_data.append({
                     'filename': img_file,
                     'label': label,
-                    'n_defects': features[0],
-                    'area_ratio': features[1],
-                    'aspect_ratio': features[2],
                     'mean_distance': features[3],
-                    'std_dev': features[4],
-                    'density': features[5]
+                    'std_dev': features[4]
                 })
                 
         # Simpan hasil ke CSV
@@ -631,6 +564,11 @@ class FeatureExtractor:
         n_pixels = len(white_pixels)
         center_x = sum_x / n_pixels
         center_y = sum_y / n_pixels
+
+        print(f"Sum X: {sum_x}, Sum Y: {sum_y}, N Pixels: {n_pixels}")
+        print(f"Image Size: {width}x{height}")
+        print(f"Centroid: ({center_x}, {center_y})")
+
         
         # Hitung jarak dari setiap piksel ke centroid
         distances = []
@@ -640,8 +578,6 @@ class FeatureExtractor:
             
         # Hitung mean distance
         mean_distance = sum(distances) / len(distances)
-        print(f"Perhitungan dari {n_pixels} piksel putih: mean distance = {mean_distance}")
-
         
         # Hitung standard deviation
         sum_squared_diff = sum((d - mean_distance)**2 for d in distances)
@@ -650,8 +586,6 @@ class FeatureExtractor:
         # Hitung densitas (proporsi piksel putih terhadap total area)
         total_area = height * width
         density = n_pixels / total_area if total_area > 0 else 0
-
-        print(f"Total area: {total_area}, Densitas: {density}, Standar deviasi: {std_dev}")
         
         return mean_distance, std_dev, density
     
